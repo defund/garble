@@ -10,10 +10,27 @@ BUF_LEN = 16
 class Wire:
 	Label = namedtuple('Label', 'buf ptr')
 
-	def __init__(self):
+	def __init__(self, zero, one):
+		self.zero = zero
+		self.one = one
+
+	@classmethod
+	def new(cls):
 		ptr = random.getrandbits(1)
-		self.zero = Wire.Label(get_random_bytes(BUF_LEN), ptr)
-		self.one = Wire.Label(get_random_bytes(BUF_LEN), ptr ^ 1)
+		zero = Wire.Label(get_random_bytes(BUF_LEN), ptr)
+		one = Wire.Label(get_random_bytes(BUF_LEN), ptr ^ 1)
+		return cls(zero, one)
+
+	@classmethod
+	def with_label(cls, label, value):
+		other_label = Wire.Label(get_random_bytes(BUF_LEN), label.ptr ^ 1)
+		match value:
+			case 0:
+				return cls(label, other_label)
+			case 1:
+				return cls(other_label, label)
+			case _:
+				raise ValueError('value must be 0 or 1')
 
 	def get_label(self, value):
 		match value:
@@ -22,7 +39,7 @@ class Wire:
 			case 1:
 				return self.one
 			case _:
-				raise ValueError('cannot translate value to label')
+				raise ValueError('value must be 0 or 1')
 
 	def get_value(self, label):
 		match label:
@@ -50,19 +67,32 @@ class Cipher:
 	def decrypt(self, row):
 		return Wire.Label(self.xor_buf(row[0]), self.xor_bit(row[1]))
 
+	def default_label(self):
+		return Wire.Label(self.shake.read(BUF_LEN), self.shake.read(1)[0] & 1)
+
 def garble_gate(idx, op, wa, wb):
-	wc = Wire()
+	for va, vb, vc in get_truth_table(op):
+		la = wa.get_label(va)
+		lb = wb.get_label(vb)
+		if la.ptr == 0 and lb.ptr == 0:
+			lc = Cipher(idx, la, lb).default_label()
+			wc = Wire.with_label(lc, vc)
+			break
 	table = [[None, None], [None, None]]
 	for va, vb, vc in get_truth_table(op):
 		la = wa.get_label(va)
 		lb = wb.get_label(vb)
 		lc = wc.get_label(vc)
-		table[la.ptr][lb.ptr] = Cipher(idx, la, lb).encrypt(lc)
+		if not (la.ptr == 0 and lb.ptr == 0):
+			table[la.ptr][lb.ptr] = Cipher(idx, la, lb).encrypt(lc)
 	return wc, table
 
 def evaluate_gate(idx, table, la, lb):
-	row = table[la.ptr][lb.ptr]
-	return Cipher(idx, la, lb).decrypt(row)
+	if la.ptr == 0 and lb.ptr == 0:
+		return Cipher(idx, la, lb).default_label()
+	else:
+		row = table[la.ptr][lb.ptr]
+		return Cipher(idx, la, lb).decrypt(row)
 
 def garble(circuit):
 	wires = []
@@ -72,7 +102,7 @@ def garble(circuit):
 	for idx, line in enumerate(circuit):
 		match line:
 			case ('id',):
-				wire = Wire()
+				wire = Wire.new()
 				wires.append(wire)
 				in_wires.append(wire)
 			case ('id', a):
