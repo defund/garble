@@ -1,4 +1,13 @@
 from circuit import circuit, op
+from Crypto.Random import get_random_bytes, random
+
+BUF_LEN = 16
+
+def rand_bit():
+	return random.getrandbits(1)
+
+def rand_buf():
+	return get_random_bytes(BUF_LEN)
 
 def get_truth_table(op):
 	match op:

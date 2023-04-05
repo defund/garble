@@ -1,82 +1,29 @@
-from collections import namedtuple
-from Crypto.Hash import SHAKE128
-from Crypto.Random import get_random_bytes, random
-from Crypto.Util.strxor import strxor
+import point_and_permute
+from utils import BUF_LEN, rand_buf, get_truth_table
 
-from utils import get_truth_table
-
-BUF_LEN = 16
-
-class Wire:
-	Label = namedtuple('Label', 'buf ptr')
-
-	def __init__(self, zero, one):
-		self.zero = zero
-		self.one = one
-
+class Wire(point_and_permute.Wire):
 	@classmethod
-	def new(cls):
-		ptr = random.getrandbits(1)
-		zero = Wire.Label(get_random_bytes(BUF_LEN), ptr)
-		one = Wire.Label(get_random_bytes(BUF_LEN), ptr ^ 1)
-		return cls(zero, one)
-
-	@classmethod
-	def with_label(cls, label, value):
-		other_label = Wire.Label(get_random_bytes(BUF_LEN), label.ptr ^ 1)
+	def new_with_label(cls, label, value):
+		other = Wire.Label(rand_buf(), label.ptr ^ 1)
 		match value:
 			case 0:
-				return cls(label, other_label)
+				return cls(label, other)
 			case 1:
-				return cls(other_label, label)
+				return cls(other, label)
 			case _:
 				raise ValueError('value must be 0 or 1')
 
-	def get_label(self, value):
-		match value:
-			case 0:
-				return self.zero
-			case 1:
-				return self.one
-			case _:
-				raise ValueError('value must be 0 or 1')
-
-	def get_value(self, label):
-		match label:
-			case self.zero:
-				return 0
-			case self.one:
-				return 1
-			case _:
-				raise ValueError('cannot translate label to value')
-
-class Cipher:
-	def __init__(self, idx, *labels):
-		key = idx.to_bytes(8, 'big') + b''.join([l.buf for l in labels])
-		self.shake = SHAKE128.new(key)
-
-	def xor_buf(self, buf):
-		return strxor(buf, self.shake.read(BUF_LEN))
-
-	def xor_bit(self, bit):
-		return bit ^ self.shake.read(1)[0] & 1
-
-	def encrypt(self, label):
-		return self.xor_buf(label.buf), self.xor_bit(label.ptr)
-
-	def decrypt(self, row):
-		return Wire.Label(self.xor_buf(row[0]), self.xor_bit(row[1]))
-
-	def default_label(self):
-		return Wire.Label(self.shake.read(BUF_LEN), self.shake.read(1)[0] & 1)
+class Cipher(point_and_permute.Cipher):
+	def decrypt_zeros(self):
+		return self.decrypt((bytes(BUF_LEN), 0))
 
 def garble_gate(idx, op, wa, wb):
 	for va, vb, vc in get_truth_table(op):
 		la = wa.get_label(va)
 		lb = wb.get_label(vb)
 		if la.ptr == 0 and lb.ptr == 0:
-			lc = Cipher(idx, la, lb).default_label()
-			wc = Wire.with_label(lc, vc)
+			lc = Cipher(idx, la, lb).decrypt_zeros()
+			wc = Wire.new_with_label(lc, vc)
 			break
 	table = [[None, None], [None, None]]
 	for va, vb, vc in get_truth_table(op):
@@ -89,7 +36,7 @@ def garble_gate(idx, op, wa, wb):
 
 def evaluate_gate(idx, table, la, lb):
 	if la.ptr == 0 and lb.ptr == 0:
-		return Cipher(idx, la, lb).default_label()
+		return Cipher(idx, la, lb).decrypt_zeros()
 	else:
 		row = table[la.ptr][lb.ptr]
 		return Cipher(idx, la, lb).decrypt(row)

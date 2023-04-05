@@ -1,18 +1,22 @@
 from collections import namedtuple
 from Crypto.Hash import SHAKE128
-from Crypto.Random import get_random_bytes, random
+from Crypto.Random.random import shuffle
 from Crypto.Util.strxor import strxor
 
-from utils import get_truth_table
-
-BUF_LEN = 16
+from utils import BUF_LEN, rand_buf, get_truth_table
 
 class Wire:
-	Label = namedtuple('Label', 'buf')
+	Label = namedtuple('Label', 'key')
 
-	def __init__(self):
-		self.zero = Wire.Label(get_random_bytes(BUF_LEN))
-		self.one = Wire.Label(get_random_bytes(BUF_LEN))
+	def __init__(self, zero, one):
+		self.zero = zero
+		self.one = one
+
+	@classmethod
+	def new(cls):
+		zero = Wire.Label(rand_buf())
+		one = Wire.Label(rand_buf())
+		return cls(zero, one)
 
 	def get_label(self, value):
 		match value:
@@ -34,28 +38,28 @@ class Wire:
 
 class Cipher:
 	def __init__(self, idx, *labels):
-		key = idx.to_bytes(8, 'big') + b''.join([l.buf for l in labels])
+		key = idx.to_bytes(8, 'big') + b''.join([l.key for l in labels])
 		self.shake = SHAKE128.new(key)
 
 	def xor_buf(self, buf):
 		return strxor(buf, self.shake.read(BUF_LEN))
 
 	def encrypt(self, label):
-		return self.shake.read(BUF_LEN), self.xor_buf(label.buf)
+		return self.shake.read(BUF_LEN), self.xor_buf(label.key)
 
 	def decrypt(self, row):
 		assert self.shake.read(BUF_LEN) == row[0]
 		return Wire.Label(self.xor_buf(row[1]))
 
 def garble_gate(idx, op, wa, wb):
-	wc = Wire()
+	wc = Wire.new()
 	table = []
 	for va, vb, vc in get_truth_table(op):
 		la = wa.get_label(va)
 		lb = wb.get_label(vb)
 		lc = wc.get_label(vc)
 		table.append(Cipher(idx, la, lb).encrypt(lc))
-	random.shuffle(table)
+	shuffle(table)
 	return wc, table
 
 def evaluate_gate(idx, table, la, lb):
@@ -74,7 +78,7 @@ def garble(circuit):
 	for idx, line in enumerate(circuit):
 		match line:
 			case ('id',):
-				wire = Wire()
+				wire = Wire.new()
 				wires.append(wire)
 				in_wires.append(wire)
 			case ('id', a):
@@ -102,7 +106,6 @@ def evaluate(circuit, in_labels, out_wires, tables):
 			case (_, a, b):
 				labels.append(evaluate_gate(idx, next(tables), labels[a], labels[b]))
 	return out_bits
-
 
 if __name__ == '__main__':
 	from utils import build_sample_circuit, serialize
